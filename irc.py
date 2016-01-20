@@ -5,6 +5,7 @@ from twisted.python import log
 import datetime, time, sys, sqlite3
 import requests
 from collections import defaultdict
+import pytz
 
 class LameError(Exception):
     pass
@@ -24,7 +25,11 @@ class ShitAPIError(Exception):
 class RegisterError(Exception):
     pass
 
+class MarketClosedError(Exception):
+    pass
+
 class YoloSwag(object):
+    TIMEZONE = pytz.timezone('US/Eastern')
     def __init__(self, db_file='swag.db', init_amt=10000.0, trade_cost = 7.0):
         self.init_amt = 10000.0
         self.trade_cost = trade_cost
@@ -43,7 +48,13 @@ class YoloSwag(object):
         with self.conn:
             self.conn.execute("insert into players (nick, cash) values (?, ?)", (nick, self.init_amt))
 
+    def check_mkt_hrs(self):
+        now = datetime.datetime.now(self.TIMEZONE)
+        if now.hour >= 16 or now.hour < 9 or (now.hour == 9 and now.minute < 30):
+            raise MarketClosedError()
+
     def buy(self, nick, symbol, shares):
+        self.check_mkt_hrs()
         symbol = symbol.upper()
         with self.conn:
             r = self.conn.execute("select id, cash from players where nick = ?", (nick,)).fetchone()
@@ -61,6 +72,7 @@ class YoloSwag(object):
         return price
 
     def sell(self, nick, symbol, shares):
+        self.check_mkt_hrs()
         symbol = symbol.upper()
         with self.conn:
             r = self.conn.execute("select id, cash from players where nick = ?", (nick,)).fetchone()
@@ -82,9 +94,12 @@ class YoloSwag(object):
             self.conn.execute("update players set cash = ? where id = ?", (holdings + value, pid))
         return (shares, price)
 
-    def holdings(self, nick):
+    def holdings_(self, nick):
         with self.conn:
-            pid, holdings = self.conn.execute("select id, cash from players where nick = ?", (nick,)).fetchone()
+            r = self.conn.execute("select id, cash from players where nick = ?", (nick,)).fetchone()
+            if not r:
+                raise RegisterError()
+            pid, holdings = r
             positions = [row for row in self.conn.execute("select symbol, shares, price from buys where player_id = ? order by purchase_date asc", (pid,))]
         d = defaultdict(list)
         for sym, shares, price in positions:
@@ -102,6 +117,25 @@ class YoloSwag(object):
                     total_price += shares * price
             if total_shares > 0:
                 sym_holdings.append([sym, total_shares, total_price / total_shares])
+        return {"cash": holdings, "positions": sym_holdings}
+
+    def total_value(self, nick):
+        ret = self.holdings_(nick)
+        holdings = ret["cash"]
+        sym_holdings = ret["positions"]
+        r = "Your holdings:\n\t### CASH: $%s\n" % (holdings,)
+        stock_value = 0.0
+        for symbol, shares, avg_price in sym_holdings:
+            current_value = self.lookup_price(symbol) * shares
+            stock_value += current_value
+            r += "\t%s: %s shares (avg price %s) (current value %s)\n" % (symbol, shares, avg_price, current_value)
+        r += "\tTOTAL VALUE: $%s\n" % (holdings + stock_value)
+        return r
+
+    def holdings(self, nick):
+        ret = self.holdings_(nick)
+        holdings = ret["cash"]
+        sym_holdings = ret["positions"]
         r = "Your holdings:\n\t### CASH: $%s\n" % (holdings,)
         for symbol, shares, avg_price in sym_holdings:
             r += "\t%s: %s shares (avg price %s)\n" % (symbol, shares, avg_price)
@@ -137,6 +171,7 @@ class YoloSwagBot(irc.IRCClient):
         irc.IRCClient.connectionMade(self)
         db = "%s.db" % self.factory.channel[1:]
         self.swag = YoloSwag(db_file=db)
+        self.checked = {}
 
     def connectionLost(self, reason):
         irc.IRCClient.connectionLost(self, reason)
@@ -159,6 +194,13 @@ class YoloSwagBot(irc.IRCClient):
                     self.msg(channel, str(self.swag.cash()))
                 elif cmd == "rules":
                     self.rules(channel)
+                elif cmd == "yacht":
+                    last_checked = self.checked.get(user, datetime.date(1970, 1, 1))
+                    if last_checked >= datetime.date.today():
+                        self.msg(channel, "You already looked today you big ol' lookie loo")
+                    else:
+                        self.msg(channel, str(self.swag.total_value(user)))
+                        self.checked[user] = datetime.date.today()
                 elif cmd == "holdings":
                     self.msg(channel, str(self.swag.holdings(user)))
                 elif cmd == "register":
@@ -182,6 +224,8 @@ class YoloSwagBot(irc.IRCClient):
                 self.msg(channel, "Bro, you're not even playing yet, try trying '%s: register" % (self.nickname,))
             except NoSymbolError, e:
                 self.msg(channel, "Nonesuch symbol, Chet! '%s'" % e)
+            except MarketClosedError, e:
+                self.msg(channel, "SEATS TAKEN. JK forrest market's closed")
             except Exception, e:
                 self.msg(channel, "Bro, something broke: %s" % e)
                 raise
