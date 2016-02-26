@@ -61,9 +61,13 @@ class YoloSwag(object):
             if not r:
                 raise RegisterError()
             pid, holdings = r
+            price = self.lookup_price(symbol)
+            if shares == "all":
+                shares = int(holdings / price) - int(self.trade_cost / price) - 1
+            else:
+                shares = int(shares)
             if shares < 1:
                 raise LameError("Bro, gonna try to sell zero shares? Mad bullish imo")
-            price = self.lookup_price(symbol)
             cost = self.trade_cost + (shares * price)
             if holdings < cost:
                 raise NoCashError("Bro, you don't got the cash, you're only sittin' on %s" % holdings)
@@ -208,7 +212,7 @@ class YoloSwagBot(irc.IRCClient):
                     self.msg(channel, "%s registered" % (user,))
                 elif cmd == "buy":
                     try:
-                        price = self.swag.buy(user, args[0], int(args[1]))
+                        price = self.swag.buy(user, args[0], args[1])
                         self.msg(channel, "%s: Your buy is in: %s shares of %s (price %s)" % (user, args[1], args[0], price))
                     except NoCashError, e:
                         self.msg(channel, str(e))
@@ -218,6 +222,8 @@ class YoloSwagBot(irc.IRCClient):
                         self.msg(channel, "%s: Your sale is in: you just cashed out %s shares of %s at $%s per share: $%s" % (user, shares, args[0], price, shares * price))
                     except NoSharesError, e:
                         self.msg(channel, str(e))
+                else:
+                    self.msg(channel, "Dunno that one, try '%s: rules'" % self.nickname)
             except LameError, e:
                 self.msg(channel, str(e))
             except RegisterError:
@@ -239,12 +245,13 @@ Commands:
     register -> register your nick as a CONTENDER
     leaderboard -> display the leaderboard
     holdings -> display your holdings
+    yacht -> show all your cash and holding value ONLY ONCE A DAY THO
     buy [symbol] [shares] -> purchase [shares] shares of [symbol] at current price
     sell [symbol] [shares | "all"] -> sell [shares] (or all) shares of [symbol] at current price, buy a boat'''
         self.msg(channel, rules % (self.swag.init_amt, self.swag.trade_cost))
         
 
-class BotFactory(protocol.ClientFactory):
+class BotFactory(protocol.ReconnectingClientFactory):
     def __init__(self, channel):
         self.channel = channel
 
@@ -254,10 +261,10 @@ class BotFactory(protocol.ClientFactory):
         return p
 
     def clientConnectionLost(self, connector, reason):
-        connector.connect()
+        protocol.ReconnectingClientFactory.clientConnectionLost(self, connector, reason)
 
     def clientConnectionFailed(self, connector, reason):
-        reactor.stop()
+        protocol.ReconnectingClientFactory.clientConnectionLost(self, connector, reason)
 
 
 if __name__ == '__main__':
