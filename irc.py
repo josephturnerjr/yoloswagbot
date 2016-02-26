@@ -67,7 +67,7 @@ class YoloSwag(object):
             else:
                 shares = int(shares)
             if shares < 1:
-                raise LameError("Bro, gonna try to sell zero shares? Mad bullish imo")
+                raise LameError("Bro, gonna try to buy zero shares? Mad bullish imo")
             cost = self.trade_cost + (shares * price)
             if holdings < cost:
                 raise NoCashError("Bro, you don't got the cash, you're only sittin' on %s" % holdings)
@@ -246,7 +246,7 @@ Commands:
     leaderboard -> display the leaderboard
     holdings -> display your holdings
     yacht -> show all your cash and holding value ONLY ONCE A DAY THO
-    buy [symbol] [shares] -> purchase [shares] shares of [symbol] at current price
+    buy [symbol] [shares | "all"] -> purchase [shares] shares of [symbol] at current price
     sell [symbol] [shares | "all"] -> sell [shares] (or all) shares of [symbol] at current price, buy a boat'''
         self.msg(channel, rules % (self.swag.init_amt, self.swag.trade_cost))
         
